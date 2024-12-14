@@ -1,11 +1,11 @@
-;;; tramp-theme.el --- Custom theme for remote buffers
+;;; tramp-theme.el --- Custom theme for remote buffers  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2016-2017 Free Software Foundation, Inc.
+;; Copyright (C) 2016-2024 Free Software Foundation, Inc.
 
 ;; Author: Michael Albinus <michael.albinus@gmx.de>
 ;; Keywords: convenience, faces
 ;; Package: tramp-theme
-;; Version: 0.2
+;; Version: 0.3
 ;; Package-Requires: ((emacs "24.1"))
 
 ;; This file is not part of GNU Emacs.
@@ -45,6 +45,14 @@
   "A custom theme to decorate buffers when they are remote.
 It can be combined with other custom themes.")
 
+(defface mode-line-remote
+  '((t :inherit (mode-line default)))
+  "Face for the selected mode line remote buffer indication.
+This inherits from the `mode-line' face."
+  :version "30.1"
+  :group 'mode-line-faces
+  :group 'basic-faces)
+
 (defcustom tramp-theme-face-remapping-alist
   `((nil "^root$"
     (mode-line-buffer-id
@@ -76,8 +84,13 @@ frames using the remote user \"root\":
      (\"^bar$\" nil (default (:background \"Green\")))
      (\"^bar$\" nil (dired-directory (:background \"Green\"))))
 
-Per default, `mode-line-buffer-identification' is displayed
-inverse for buffers which are editable with \"root\" permissions."
+Per default, `mode-line-buffer-identification' contains the remote host
+name.  It is displayed inverse for buffers which are editable with
+\"root\" permissions.  If you want to display inverse `mode-line-remote'
+instead, set this user option to
+
+    ((nil \"^root$\"
+      (mode-line-remote (:inherit mode-line-remote :inverse-video t))))"
   :group 'tramp
   :type `(repeat (list (choice :tag "Host regexp" regexp (const nil))
 		       (choice :tag "User regexp" regexp (const nil))
@@ -86,9 +99,8 @@ inverse for buffers which are editable with \"root\" permissions."
 
 (defun tramp-theme-original-value (variable)
   "Return the original value of VARIABLE before loading `tramp-theme'."
-  (let ((theme-value (get variable 'theme-value)))
-    (or (cdr (car (delete (assoc 'tramp theme-value) theme-value)))
-	(get variable 'tramp-theme-original-value))))
+  (or (eval (car (alist-get 'changed (get variable 'theme-value))))
+      (get variable 'tramp-theme-original-value)))
 
 (defvar-local tramp-theme-face-remapping-cookies nil
   "Cookies store of local face remapping settings.")
@@ -105,16 +117,18 @@ Per side effect, it enables also face remapping in the current buffer."
   (append
    (when (custom-theme-enabled-p 'tramp)
      (let ((host (file-remote-p default-directory 'host))
-	   (user (file-remote-p default-directory 'user)))
+	   (user (file-remote-p default-directory 'user))
+           apply)
        ;; Apply `tramp-theme-face-remapping-alist'.
        (dolist (elt tramp-theme-face-remapping-alist)
+         (setq apply (or apply (eq (car (nth 2 elt)) 'mode-line-buffer-id)))
 	 (when (and (string-match (or (nth 0 elt) "") (or host ""))
 		    (string-match (or (nth 1 elt) "") (or user "")))
 	   (push (face-remap-add-relative (car (nth 2 elt)) (cdr (nth 2 elt)))
 		 tramp-theme-face-remapping-cookies)))
 
        ;; The extended string.
-       (when host
+       (when (and host apply)
 	 ;; Do not use FQDN.
 	 (when (string-match "^[^0-9][^.]*\\(\\..*\\)" host)
 	   (setq host (substring host 0 (match-beginning 1))))
@@ -126,25 +140,60 @@ Per side effect, it enables also face remapping in the current buffer."
    ;; That's the original definition.
    (tramp-theme-original-value 'mode-line-buffer-identification)))
 
+(defun tramp-theme-mode-line-remote ()
+  "Return a list suitable for `mode-line-remote'.
+It indicates the remote host being used, if any.
+
+Per side effect, it enables also face remapping in the current buffer."
+  ;; Clear previous face remappings.
+  (mapc 'face-remap-remove-relative tramp-theme-face-remapping-cookies)
+  (setq tramp-theme-face-remapping-cookies nil)
+
+  (when (custom-theme-enabled-p 'tramp)
+    (let ((host (file-remote-p default-directory 'host))
+	  (user (file-remote-p default-directory 'user))
+          apply)
+      ;; Apply `tramp-theme-face-remapping-alist'.
+      (dolist (elt tramp-theme-face-remapping-alist)
+        (setq apply (or apply (eq (car (nth 2 elt)) 'mode-line-remote)))
+	(when (and (string-match (or (nth 0 elt) "") (or host ""))
+		   (string-match (or (nth 1 elt) "") (or user "")))
+	  (push (face-remap-add-relative (car (nth 2 elt)) (cdr (nth 2 elt)))
+		tramp-theme-face-remapping-cookies)))
+
+      ;; The extended string.
+      (if (and host apply)
+          (let ((string (car (tramp-theme-original-value 'mode-line-remote))))
+            (list (apply #'propertize string 'face 'mode-line-remote
+                         (text-properties-at 0 string))))
+        (tramp-theme-original-value 'mode-line-remote)))))
+
 (defun tramp-theme-hook-function ()
-  "Modify `mode-line-buffer-indication'.
+  "Modify `mode-line-buffer-indication' and `mode-line-remote'.
 Used in different hooks, in order to accelerate the redisplay."
   (setq
    mode-line-buffer-identification
-   (tramp-theme-mode-line-buffer-identification)))
+   (tramp-theme-mode-line-buffer-identification)
+   mode-line-remote (tramp-theme-mode-line-remote)))
 
 (unless (custom-theme-enabled-p 'tramp)
   ;; Save the original value.
   (unless (get 'mode-line-buffer-identification 'tramp-theme-original-value)
     (put 'mode-line-buffer-identification
 	 'tramp-theme-original-value
-	 mode-line-buffer-identification))
+	 mode-line-buffer-identification)
+    (put 'mode-line-remote
+	 'tramp-theme-original-value
+	 mode-line-remote))
 
   (custom-theme-set-variables
    'tramp
    ;; Extend `mode-line-buffer-identification' by host name.
    '(mode-line-buffer-identification
      '(:eval (tramp-theme-mode-line-buffer-identification)))
+   ;; Extend `mode-line-remote' by face.
+   '(mode-line-remote
+     '(:eval (tramp-theme-mode-line-remote)))
    ;; `dired-mode' overwrites `mode-line-buffer-identification'.  We
    ;; want to use our own extension.
    '(dired-mode-hook
@@ -175,5 +224,7 @@ Used in different hooks, in order to accelerate the redisplay."
 ;; * Use a :type for `tramp-theme-face-remapping-alist' which allows
 ;;   to edit the faces.  Maybe use (widget-get custom-face-edit :args)
 ;;   for this.
+
+;; * Add `mode-line-remote' to faces.el.
 
 ;;; tramp-theme.el ends here
